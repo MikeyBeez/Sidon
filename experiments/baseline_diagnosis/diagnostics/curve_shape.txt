@@ -1,0 +1,20 @@
+Train loss at step 20000: 0.1054 (PPL 1.11)
+Val loss at step 20000: 5.1706 (PPL 176.0)
+ln(65) = 4.1744 (uniform random PPL = 65)
+
+Train loss crosses below ln(65) at step: 100
+Overfit ratio (val_loss / train_loss): 49.1x
+
+DIAGNOSIS: The model has catastrophically overfit. Train loss = 0.1054
+(near-perfect memorization of training data) while val loss = 5.1706
+(worse than uniform random). This is real catastrophic overfitting on a tiny
+dataset with a model that has enough capacity to memorize it.
+
+The 4.7M parameter model has memorized the 1M character training set.
+Val PPL > 65 means the model is CONFIDENTLY WRONG on held-out data —
+it assigns high probability to memorized continuations that don't match
+the val text, which is penalized more than uniform uncertainty.
+
+This is NOT an eval bug — it's genuine overfitting. The model assigns
+concentrated probability mass to wrong next-characters based on memorized
+training sequences, rather than spreading it uniformly.

@@ -1,0 +1,17 @@
+{
+  "method1_sequential": {
+    "loss": 5.168498730933529,
+    "ppl": 175.65094012025628
+  },
+  "method2_random_batches": {
+    "loss": 5.1679741525650025,
+    "ppl": 175.55882160046167
+  },
+  "train_eval": {
+    "loss": 0.09878615263849497,
+    "ppl": 1.1038302231368542
+  },
+  "uniform_random_loss": 4.174387269895637,
+  "uniform_random_ppl": 65,
+  "diagnosis": "val_loss > ln(vocab) means worse than uniform"
+}

@@ -1,0 +1,13 @@
+len(train_data) = 1003854 tokens
+len(val_data) = 111540 tokens
+train_text[:50] = 'First Citizen:\nBefore we proceed any further, hear'
+val_text[:50] = '?\n\nGREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTI'
+train_data[:50] decoded = 'First Citizen:\nBefore we proceed any further, hear'
+val_data[:50] decoded = '?\n\nGREMIO:\nGood morrow, neighbour Baptista.\n\nBAPTI'
+Unique chars in train: 65, val: 61
+Overlap: 61/65 = 0.94
+Val first 1000 chars found in train text: False
+
+Train/val split is sequential (first 90% / last 10% of input.txt)
+train_text matches train_data: True
+val_text matches val_data: True
