@@ -29,7 +29,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from sidon import l_sidon, l_sidon_k3
+from sidon import l_sidon, l_sidon_k3, l_order_k3
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -80,6 +80,10 @@ sidon_k = 2  # 2 for pairs, 3 for triples
 address_dim = 2
 sidon_gamma = 1.0
 sidon_num_samples = 10000
+# order channel (k=3 learned ordering, rung 2): dims [address_dim:address_dim+order_dim]
+order_dim = 0  # 0 = off
+order_gamma = 1.0
+order_num_samples = 10000
 # reproducibility
 seed = 1337
 # -----------------------------------------------------------------------------
@@ -317,8 +321,17 @@ while True:
                               address_dim=address_dim,
                               num_samples=sidon_num_samples,
                               gamma=sidon_gamma)
-            last_sidon_loss = s_loss.item()
-            loss = loss + sidon_lambda * s_loss
+            reg = s_loss
+            if order_dim > 0:
+                o_loss = l_order_k3(raw_model.transformer.wte.weight,
+                                    vocab_size=model_args['vocab_size'],
+                                    sidon_dim=address_dim,
+                                    order_dim=order_dim,
+                                    num_samples=order_num_samples,
+                                    gamma=order_gamma)
+                reg = s_loss + o_loss
+            last_sidon_loss = reg.item()
+            loss = loss + sidon_lambda * reg
         loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')

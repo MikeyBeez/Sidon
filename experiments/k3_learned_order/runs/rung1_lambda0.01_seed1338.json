@@ -1,0 +1,22 @@
+{
+  "config": {
+    "rung": 1,
+    "lambda": 0.01,
+    "sidon_dim": 4,
+    "order_dim": 0,
+    "gamma": 1.0,
+    "seed": 1338,
+    "recovery_inputs": "noised pooled vector + model-derived candidate table; NO token/position/order-code metadata"
+  },
+  "evaluation": {
+    "val_perplexity": 5.238756917343465,
+    "val_loss": 1.6560842406749725,
+    "val_perplexity_baseline_ratio": null,
+    "multiset_recovery_sidon": 0.9834,
+    "sidon_satisfaction_rate": 0.6767869178336412,
+    "ordered_recovery": 0.5603333333333333,
+    "multiset_recovery_from_ordered_table": 0.571,
+    "ordered_vs_multiset_gap": 0.4230666666666667,
+    "n_ordered_triples": 274625
+  }
+}

@@ -89,6 +89,109 @@ def l_sidon_k3(embedding_table, vocab_size=None, address_dim=4, num_samples=1000
     return violations.mean()
 
 
+def make_pos_mod(order_dim, n_pos=3):
+    """Fixed, distinct per-position modulation vectors (unit-norm rows).
+    Deterministic across train/eval: generated on CPU from a fixed seed."""
+    g = torch.Generator().manual_seed(12345)
+    m = torch.randn(n_pos, order_dim, generator=g)
+    m = m / m.norm(dim=1, keepdim=True)
+    return m
+
+
+def l_order_k3(embedding_table, vocab_size=None, sidon_dim=4, order_dim=4,
+               num_samples=10000, gamma=1.0):
+    """Order-injectivity loss: push apart the position-modulated order pools of
+    two orderings of the SAME multiset. Operates on embedding dims [sidon_dim:sidon_dim+order_dim].
+
+    Different multisets are separated by the Sidon channel; this loss only needs to
+    separate orderings WITHIN a multiset, which is where the multiplicative position
+    modulation breaks the permutation-invariance of the additive pool.
+    """
+    V = embedding_table.shape[0] if vocab_size is None else vocab_size
+    o = embedding_table[:V, sidon_dim:sidon_dim + order_dim]
+    pos_mod = make_pos_mod(order_dim).to(embedding_table.device).type_as(o)
+
+    n = num_samples
+    t = torch.randint(V, (n, 3), device=embedding_table.device)
+    perm = torch.argsort(torch.rand(n, 3, device=embedding_table.device), dim=1)
+    t2 = torch.gather(t, 1, perm)
+    different = (t != t2).any(dim=1)  # ordering actually changed
+    t = t[different]
+    t2 = t2[different]
+    if t.shape[0] == 0:
+        return torch.tensor(0.0, device=embedding_table.device, requires_grad=True)
+
+    pool1 = pos_mod[0] * o[t[:, 0]] + pos_mod[1] * o[t[:, 1]] + pos_mod[2] * o[t[:, 2]]
+    pool2 = pos_mod[0] * o[t2[:, 0]] + pos_mod[1] * o[t2[:, 1]] + pos_mod[2] * o[t2[:, 2]]
+    dist = torch.norm(pool1 - pool2, dim=1)
+    return torch.clamp(gamma - dist, min=0).mean()
+
+
+@torch.no_grad()
+def order_metrics_k3(embedding_table, vocab_size=None, sidon_dim=4, order_dim=4,
+                     gamma=1.0, noise_std=0.01, n_eval=3000, block=256,
+                     rung1_shared=False):
+    """Ordered recovery from the pooled vector alone.
+
+    The recovery procedure receives ONLY the noised pooled vector and a table of
+    candidate pools built from the model's parameters. No token/position/order-code
+    metadata is supplied.
+
+    rung1_shared=True: no separate order dims; the position modulation is applied to
+    the shared Sidon dims (tests whether order falls out of multiset geometry for free).
+    rung1_shared=False (rung 2): Sidon dims carry the multiset (plain sum), separate
+    order dims carry the position-modulated order pool; the full vector is their concat.
+    """
+    V = embedding_table.shape[0] if vocab_size is None else vocab_size
+    addr = embedding_table[:V, :sidon_dim]
+    device = embedding_table.device
+
+    # Enumerate all V^3 ordered triples
+    ar = torch.arange(V, device=device)
+    ii, jj, kk = torch.meshgrid(ar, ar, ar, indexing='ij')
+    triples = torch.stack([ii.flatten(), jj.flatten(), kk.flatten()], dim=1)  # (V^3, 3)
+    N = triples.shape[0]
+
+    if rung1_shared:
+        pos_mod = make_pos_mod(sidon_dim).to(device).type_as(addr)
+        full = (pos_mod[0] * addr[triples[:, 0]]
+                + pos_mod[1] * addr[triples[:, 1]]
+                + pos_mod[2] * addr[triples[:, 2]])
+    else:
+        o = embedding_table[:V, sidon_dim:sidon_dim + order_dim]
+        pos_mod = make_pos_mod(order_dim).to(device).type_as(o)
+        ms = addr[triples[:, 0]] + addr[triples[:, 1]] + addr[triples[:, 2]]
+        op = (pos_mod[0] * o[triples[:, 0]]
+              + pos_mod[1] * o[triples[:, 1]]
+              + pos_mod[2] * o[triples[:, 2]])
+        full = torch.cat([ms, op], dim=1)
+
+    g = torch.Generator(device=device).manual_seed(0)
+    qidx = torch.randperm(N, device=device, generator=g)[:min(n_eval, N)]
+    qfull = full[qidx]
+    noisy = qfull + torch.randn_like(qfull) * noise_std
+    q_sorted = triples[qidx].sort(dim=1).values
+
+    ordered_correct = 0
+    multiset_correct = 0
+    n_q = qidx.shape[0]
+    for s in range(0, n_q, block):
+        e = min(s + block, n_q)
+        d = torch.cdist(noisy[s:e], full)
+        pred = d.argmin(dim=1)
+        ordered_correct += (pred == qidx[s:e]).sum().item()
+        pred_sorted = triples[pred].sort(dim=1).values
+        multiset_correct += (pred_sorted == q_sorted[s:e]).all(dim=1).sum().item()
+
+    return {
+        'ordered_recovery': ordered_correct / n_q,
+        'multiset_recovery_from_ordered_table': multiset_correct / n_q,
+        'n_ordered_triples': N,
+        'n_eval': n_q,
+        'order_dim': 0 if rung1_shared else order_dim,
+    }
+
+
 def _enumerate_triples(V, device):
     """All multisets of size 3 from V items: (i, j, k) with i <= j <= k.
     Returns tensor of shape (C(V+2, 3), 3)."""
