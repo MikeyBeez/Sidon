@@ -1,4 +1,4 @@
-"""Run the k=2 Sidon validation sweep: 4 lambdas × 3 seeds on char-level Shakespeare."""
+"""k=3 ordered recovery sweep on char-level Shakespeare."""
 
 import os
 import sys
@@ -9,7 +9,8 @@ import time
 LAMBDAS = [0.0, 0.01, 0.1, 1.0]
 SEEDS = [1337, 1338, 1339]
 DATASET = 'shakespeare_char'
-RESULTS_DIR = os.path.join('..', 'experiments', 'k2_sidon_validation', 'runs')
+RESULTS_DIR = os.path.join('..', 'experiments', 'k3_ordered_recovery', 'runs')
+SIDON_K = 3
 
 COMMON_ARGS = {
     'dataset': DATASET,
@@ -31,6 +32,7 @@ COMMON_ARGS = {
     'compile': False,
     'dropout': 0.0,
     'bias': False,
+    'sidon_k': SIDON_K,
     'address_dim': 4,
     'sidon_gamma': 1.0,
     'sidon_num_samples': 10000,
@@ -39,7 +41,7 @@ COMMON_ARGS = {
 
 
 def run_name(lam, seed):
-    return f"char_lambda{lam}_seed{seed}"
+    return f"k3_char_lambda{lam}_seed{seed}"
 
 
 def train_one(lam, seed):
@@ -74,6 +76,7 @@ def eval_one(lam, seed, baseline_ppl=None):
            f'--dataset={DATASET}',
            f'--address_dim={COMMON_ARGS["address_dim"]}',
            f'--gamma={COMMON_ARGS["sidon_gamma"]}',
+           f'--sidon_k={SIDON_K}',
            f'--output={output_path}']
     if baseline_ppl is not None:
         cmd.append(f'--baseline_perplexity={baseline_ppl}')
@@ -91,7 +94,6 @@ def eval_one(lam, seed, baseline_ppl=None):
 def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # Phase 1: Train all runs
     failed = []
     for lam in LAMBDAS:
         for seed in SEEDS:
@@ -102,7 +104,6 @@ def main():
     if failed:
         print(f"\nWARNING: {len(failed)} runs failed: {failed}")
 
-    # Phase 2: Evaluate baseline (lambda=0) first to get baseline perplexity
     print("\n" + "="*60)
     print("EVALUATION PHASE")
     print("="*60)
@@ -115,14 +116,12 @@ def main():
     baseline_ppl = sum(baseline_ppls) / len(baseline_ppls) if baseline_ppls else None
     print(f"\nBaseline perplexity (mean over seeds): {baseline_ppl:.4f}")
 
-    # Phase 3: Evaluate all other runs with baseline reference
     for lam in LAMBDAS:
         if lam == 0.0:
             continue
         for seed in SEEDS:
             eval_one(lam, seed, baseline_ppl=baseline_ppl)
 
-    # Re-evaluate baseline runs with the baseline_ppl set (ratio = 1.0)
     for seed in SEEDS:
         eval_one(0.0, seed, baseline_ppl=baseline_ppl)
 

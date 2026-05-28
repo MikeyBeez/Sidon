@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from model import GPTConfig, GPT
-from sidon import sidon_metrics
+from sidon import sidon_metrics, sidon_metrics_k3
 
 
 def load_checkpoint(ckpt_path, device='cuda'):
@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--noise_std', type=float, default=0.01)
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--baseline_perplexity', type=float, default=None)
+    parser.add_argument('--sidon_k', type=int, default=2)
     args = parser.parse_args()
 
     ckpt_path = os.path.join(args.ckpt_dir, 'ckpt.pt')
@@ -77,12 +78,22 @@ def main():
     print(f"Val perplexity: {val_ppl:.4f} (loss: {val_loss:.4f})")
 
     wte = model.transformer.wte.weight
-    sm = sidon_metrics(wte, vocab_size=vocab_size, address_dim=args.address_dim,
-                       gamma=args.gamma, noise_std=args.noise_std)
-    print(f"Sidon satisfaction rate: {sm['sidon_satisfaction_rate']:.4f}")
-    print(f"Pair recovery (clean): {sm['pair_recovery_accuracy_clean']:.4f}")
-    print(f"Pair recovery (noisy {args.noise_std}): {sm[f'pair_recovery_accuracy_noisy_{args.noise_std}']:.4f}")
-    print(f"Min pairwise distance: {sm['min_pairwise_distance']:.6f}")
+    if args.sidon_k == 3:
+        sm = sidon_metrics_k3(wte, vocab_size=vocab_size, address_dim=args.address_dim,
+                              gamma=args.gamma, noise_std=args.noise_std)
+        print(f"n_multisets: {sm['n_multisets']}")
+        print(f"Sidon satisfaction rate: {sm['sidon_satisfaction_rate']:.4f}")
+        print(f"Multiset recovery (clean): {sm['pair_recovery_accuracy_clean']:.4f}")
+        print(f"Multiset recovery (noisy {args.noise_std}): {sm[f'pair_recovery_accuracy_noisy_{args.noise_std}']:.4f}")
+        print(f"Ordered recovery (noisy {args.noise_std}): {sm['ordered_recovery_accuracy_noisy']:.4f}")
+        print(f"Min pairwise distance: {sm['min_pairwise_distance']:.6f}")
+    else:
+        sm = sidon_metrics(wte, vocab_size=vocab_size, address_dim=args.address_dim,
+                           gamma=args.gamma, noise_std=args.noise_std)
+        print(f"Sidon satisfaction rate: {sm['sidon_satisfaction_rate']:.4f}")
+        print(f"Pair recovery (clean): {sm['pair_recovery_accuracy_clean']:.4f}")
+        print(f"Pair recovery (noisy {args.noise_std}): {sm[f'pair_recovery_accuracy_noisy_{args.noise_std}']:.4f}")
+        print(f"Min pairwise distance: {sm['min_pairwise_distance']:.6f}")
 
     log_path = os.path.join(args.ckpt_dir, 'training_log.json')
     loss_curve, lm_loss_curve, sidon_curve = [], [], []

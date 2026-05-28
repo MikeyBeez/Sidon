@@ -29,7 +29,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from sidon import l_sidon
+from sidon import l_sidon, l_sidon_k3
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -76,6 +76,7 @@ dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # sidon regularizer
 sidon_lambda = 0.0
+sidon_k = 2  # 2 for pairs, 3 for triples
 address_dim = 2
 sidon_gamma = 1.0
 sidon_num_samples = 10000
@@ -310,11 +311,12 @@ while True:
         with ctx:
             logits, loss = model(X, Y)
         if sidon_lambda > 0:
-            s_loss = l_sidon(raw_model.transformer.wte.weight,
-                             vocab_size=model_args['vocab_size'],
-                             address_dim=address_dim,
-                             num_samples=sidon_num_samples,
-                             gamma=sidon_gamma)
+            sidon_fn = l_sidon_k3 if sidon_k == 3 else l_sidon
+            s_loss = sidon_fn(raw_model.transformer.wte.weight,
+                              vocab_size=model_args['vocab_size'],
+                              address_dim=address_dim,
+                              num_samples=sidon_num_samples,
+                              gamma=sidon_gamma)
             last_sidon_loss = s_loss.item()
             loss = loss + sidon_lambda * s_loss
         loss = loss / gradient_accumulation_steps
