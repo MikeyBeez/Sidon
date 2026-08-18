@@ -1,0 +1,121 @@
+Sidon Pretraining Costs Zero Perplexity: First Experimental Results
+
+A follow-up to "Beyond DeepSeek's Engram," with the first numbers from a NanoGPT validation on Tiny Shakespeare, the diagnostic story that produced them, and what the next round of experiments needs to address.
+
+
+Earlier this month I posted an idea paper called Beyond DeepSeek's Engram: What If Compressed Attention Didn't Have to Be Lossy? The proposal had two parts. The first was a regularizer added to embedding pretraining — a soft Sidon constraint that would push pair-sums and small k-tuple-sums of token embeddings to stay distinct in a small dedicated subspace of the embedding. The second was the claim that this geometry, combined with DeepSeek-V4's existing positional bias in its compressed pool, might make 128-to-1 compression lossless instead of lossy.
+
+That paper was an idea paper. I said the experiments were queued behind other work and that I would get to them eventually. I have now run the smallest, simplest version of those experiments — pairwise Sidon at k equals two, with two dedicated address dimensions out of 256, on character-level Tiny Shakespeare. The result is interesting enough to write up while the work continues.
+
+The headline is short. With a right-sized model, the Sidon regularizer costs zero perplexity. Across the lambda values I tested — 0, 0.01, 0.1, and 1.0 — validation perplexity stayed within one percent of baseline, and at the lambda that the original spec named as the load-bearing test, perplexity was actually slightly better than baseline. Multiset recovery from pair-sums reached ninety-seven percent at lambda equals one. The remaining three percent is a geometric capacity limit in two dimensions, not a proposal-side failure.
+
+The story of how I got there is worth telling, because the first sweep did not land cleanly. Two things went wrong, and both taught me something about the proposal and about how to do this kind of experiment properly.
+
+
+The first sweep, and why it broke
+
+The setup was straightforward. NanoGPT, character-level Tiny Shakespeare, vocabulary size sixty-five, embedding dimension 256. The first two dimensions of the embedding were designated as the address subspace, the remaining 254 as the semantic subspace. The L_sidon term added to the loss was an exhaustive hinge penalty over distinct unordered pairs of token pairs — for any two pairs of tokens whose multisets differ, push their address-subspace sums apart by at least margin gamma equals one. Char-level Tiny Shakespeare has about two thousand distinct unordered pairs, which makes the constraint fully enumerable rather than sampled, so there is no sampling-strategy confound in this regime.
+
+The sweep ran four lambda values across three seeds. Twelve runs total. Five thousand training steps each.
+
+The first results were ambiguous. Validation perplexity sat around seven point eight across all lambdas — much higher than I expected for a char-level NanoGPT on Tiny Shakespeare, but with PPL ratios essentially at one across lambda. Sidon satisfaction maxed out at eighty percent at lambda equals one. Noisy recovery topped out at seventy-six percent and was non-monotonic — recovery at lambda equals one was lower than at lambda equals zero point one. That non-monotonicity is the kind of artifact that almost always means a configuration problem.
+
+The next decision was to train longer. The model had not converged at five thousand steps and the Sidon loss was still decreasing slowly. So we re-ran the sweep at twenty thousand steps. This time validation perplexity went up to one hundred eighty-three at baseline, with the higher-lambda runs going to two hundred.
+
+That is not a possible result. With vocabulary size sixty-five, uniform-random guessing gives perplexity of about sixty-five. Two hundred is worse than uniform random. That means the model was actively assigning high probability to wrong characters on the validation set — a confident failure, not just an uncertain one. The Sidon side of the result looked great — satisfaction climbed to ninety-six percent at lambda equals one, recovery to ninety-eight — but the comparison against a baseline that was worse than random made all of the perplexity-cost numbers meaningless.
+
+
+The diagnostic
+
+I did not run another sweep. The next step was to figure out what was going on with the baseline, because no follow-up experiment compared against a broken baseline would tell us anything useful.
+
+I wrote a small diagnostic spec for Claude Code to execute against the existing checkpoint and data. Four checks: log the validation perplexity curve every five hundred steps across training; generate samples from the trained model and see whether they look like coherent text or garbage; independently recompute validation perplexity from a fresh load of the val tensor with the model in eval mode; verify that the train-val split was not leaking. The diagnostic was designed to discriminate between three possible causes: broken eval pipeline, broken training pipeline, and real catastrophic overfitting.
+
+The check that mattered turned out to be the simplest one. At step five thousand, train loss was about zero point five and val loss was about two — a standard overfit gap, model still learning. At step twenty thousand, train loss was zero point one and val loss was five point one six. A train perplexity of one point one means the model had essentially memorized the training corpus. A val loss greater than the natural log of the vocabulary size means it was using that memorized knowledge to be confidently wrong about the held-out continuation.
+
+This is what overfitting looks like at the limit. The first lesson was uncomfortable. NanoGPT's default char-level Shakespeare configuration uses a d_model of 256 with six layers. At about three point six million parameters, that model is large enough relative to a one-megacharacter training corpus to memorize it given enough steps. The training pipeline was fine. The eval pipeline was fine. The model was simply doing what an overparameterized model does on a small dataset when nobody stops it.
+
+I had two options. Add early stopping infrastructure with proper checkpoint selection. Or just shrink the model until memorization is no longer the path of least resistance. The second option is simpler and tells me whether the proposal works at the right scale, so that is what I did. Claude Code reran the sweep with a configuration around eight hundred thousand parameters — roughly a quarter of the prior model — and the picture changed completely.
+
+
+The clean result
+
+With the right-sized model, the table is the cleanest possible version of what the proposal predicted.
+
+At lambda equals zero, validation perplexity is five point four. The model is healthy. It converges, it generalizes, it does not memorize.
+
+At lambda equals zero point zero one, validation perplexity is five point four two. The Sidon regularizer is pressing in the right direction but does not dominate. Multiset satisfaction reaches fifty percent. Recovery under small Gaussian noise hits seventy-four percent.
+
+At lambda equals zero point one — the value the spec named as the load-bearing test — validation perplexity is five point three two, slightly better than baseline. Satisfaction is at eighty-five percent. Noisy recovery is at ninety-four percent.
+
+At lambda equals one point zero, the regularizer has full pressure. Validation perplexity returns to five point four. Satisfaction is at ninety-five percent. Noisy recovery is at ninety-seven percent.
+
+The result that matters is this. Perplexity is genuinely free across the whole lambda range. The PPL ratios are zero point nine nine, one point zero one, zero point nine nine, and one point zero zero — well within seed-to-seed noise. The cost predicted by the structural argument in the original paper — that there were enough dimensions to satisfy both losses without conflict, because gradient descent has no reason to route semantic clustering through the same dimensions the regularizer is using for injectivity — appears to hold at this scale. SGD finds the Sidon geometry without paying for it on the language-modeling side.
+
+That is the load-bearing claim of the original paper, validated at the smallest meaningful scale.
+
+
+The two percent gap
+
+The original paper predicted ninety-nine percent recovery at lambda equals zero point one. We got ninety-four. At lambda equals one point zero, recovery climbed to ninety-seven, but still not the ceiling. The structural argument said the geometry should be achievable. The experiments say it is mostly achievable, with a stubborn last few percent that will not go away.
+
+The diagnostic for this is straightforward. In addition to mean pairwise distance, the evaluation tracked min pairwise distance — the closest two pair-sums in the trained address subspace. Mean pairwise distance at lambda equals one was on the order of four, well above the margin of one that the regularizer was pushing for. But min pairwise distance was on the order of zero point zero zero one. Some pairs were not just close — they were essentially coincident.
+
+This is a known pathology of hinge-loss formulations. The regularizer penalizes pairs only when their distance is below the margin gamma. Once a pair clears the margin, the gradient on that pair goes to zero and there is no further pressure to push it apart. Pairs that start close to each other at initialization can settle at the margin and stay there, while pairs that start far apart drift outward freely. Under small noise added at evaluation time, the pairs sitting near the margin are the first to cross into each other's nearest-neighbor regions and get misclassified.
+
+There are two clean fixes. The first is to give the regularizer more room: increase the address subspace from two dimensions to four. Two dimensions is geometrically tight for two thousand pair-sums under any margin — there is simply not enough volume to keep them all far apart under perturbation. The second is to replace the hinge loss with a softer formulation — for example, negative log of pairwise distance plus a small epsilon — that keeps applying gradient pressure even after pairs are far from each other. The first ablation is mechanical and answers whether capacity is the constraint. The second is informative about whether the loss formulation in the original paper needs revision.
+
+Both ablations are queued. The dimensional one runs first because it is the cleaner answer.
+
+
+What this means for the proposal
+
+The original paper had two claims. The strong one was that the Sidon regularizer on embedding pretraining, combined with DeepSeek-V4's existing positional bias in the compressed pool, could deliver lossless 128-to-1 compression. The weaker but more foundational one was that the Sidon geometry itself is trainable via SGD without disrupting language modeling.
+
+The weaker claim has been validated at the smallest scale. SGD finds Sidon-shaped geometry in a two-dimensional address subspace of a 256-dimensional embedding without any measurable cost to language modeling. The remaining gap between ninety-four percent recovery and the hypothetical hundred percent is mechanical — more dimensions or a softer loss closes it. The next round of experiments will resolve which.
+
+The stronger claim — lossless 128-to-1 compression in V4's pool — is now a question that can be approached experimentally rather than only argued for structurally. It rests on several further questions. Does V4's existing positional bias give the pool enough capacity to be sequence-injective at k equals 128 when fed Sidon-shaped inputs? Does the Sidon property survive the gated reweighting V4's pool applies, rather than only holding for uniform-weighted sums? And does any of this scale from k equals two up to k equals 128 without losing too much to dimensional packing? None of those questions can be answered from a Tiny Shakespeare experiment. But the first step in the chain — that the embedding geometry the proposal needs is trainable at all without paying for it on the LM side — has been answered cleanly.
+
+
+The honest reframing
+
+Working through the experiments forced a reconsideration of where the proposal sits in the literature. The original paper barely mentioned Tensor Product Representations or Holographic Reduced Representations. It should have.
+
+Tensor Product Representations, from Smolensky's work in the late 1980s, bind fillers to roles by outer product. Each token at each position contributes a separate outer-product matrix. The sum of those matrices is recoverable exactly: given the role vector for any position, you take the inner product and get back the filler. The mathematics is pristine. The cost is that the bound representation lives in d_filler times d_role dimensions, which becomes impractical at scale. For a 4096-dimensional embedding and 128 role slots, the bound representation would be five hundred twenty-four thousand dimensions, which defeats the purpose of compression entirely.
+
+Holographic Reduced Representations, from Plate's work in the 1990s, use circular convolution instead of outer product. The bound representation stays in the same dimension as the embedding. The cost is approximate rather than exact decoding — the unbound vector is a noisy version of the original filler, recoverable by nearest-neighbor lookup against the codebook. Plate gave explicit capacity-versus-dimension bounds. At d equals 4096 you can bind on the order of twenty to fifty fillers reliably before unbinding starts to fail. To handle 128 you need hierarchical binding or significantly larger dimensions.
+
+The Sidon proposal sits in between. It does not specify a binding operation. It modifies the filler side of the representation — the embedding geometry — so that fillers can be summed without becoming confused with other fillers. The role side, in the V4 application, comes from the pool's existing positional bias. The contribution is a learned construction of an HRR-like filler geometry, with explicit margin guarantees from the regularizer rather than probabilistic guarantees from random vector statistics.
+
+This positioning matters because it changes what the proposal claims. It is not a new attention mechanism. It is a way of pretraining embeddings to be compatible with the binding mechanisms that already exist in models like V4. The contribution is a learned analogue of HRR's filler geometry, found by SGD, that the V4 architecture can use without modification. The historical reason TPRs and HRRs were never adopted in transformers is that the dominant use case — standard attention — did not need lossless summing of token representations. The compressed-attention era creates exactly the use case those frameworks were built for and never had a target in. The Sidon regularizer is what makes the filler side cheap enough to be worth doing.
+
+
+What's next
+
+The immediate next step is the address_dim equals four ablation. If recovery climbs to ninety-nine percent or above at lambda equals zero point one, the two-percent gap was a 2D capacity limit and the proposal is fully validated at k equals two. If it does not, the loss formulation is doing the wrong thing and the soft-repulsion variant needs to be tried.
+
+After that comes k equals three with positional-notation order encoding. This is the experiment that takes the proposal from "trainable in principle" to "an actual artifact that produces lossless compressed pool entries." The plan is to add one further dedicated dimension to the embedding that carries an integer code for the ordered triple — token-a times vocabulary-size squared plus token-b times vocabulary-size plus token-c. For a fifty-thousand-token vocabulary, that integer is at most one point two five times ten to the fourteenth, which fits comfortably inside a float64. Combined with the Sidon dimension for the multiset, that gives two embedding dimensions used for structural information, supporting full ordered recovery of three tokens.
+
+The compression ratio at k equals three is on the order of six thousand to one against the raw three-token embedding sequence, near the information-theoretic floor for three ordered tokens from a fifty-thousand-token vocabulary. That is a genuinely tight result, much more aggressive than V4's k equals three pool would be in its current lossy form, and it is the cleanest demonstration of the full scheme.
+
+If k equals three lands, the proposal moves from research idea to publishable artifact. The HCA-scale claim — lossless 128-to-1 — remains aspirational and is not in the next experimental round. The route there is some combination of more dimensions, hierarchical binding, and sinusoidal positional encoding for the order channel. The building blocks are now in hand, but the engineering at that scale is its own project.
+
+
+On methodology
+
+This writeup describes one experimental cycle. The pattern that produced it is worth naming because it is generalizable.
+
+The work moved through four phases. First, idea-stage dialogue in chat with a careful interlocutor — Claude, in this case — that pressured the structural argument and the dimensional accounting until the proposal could be stated clearly. Second, a spec-stage handoff where a small, focused experiment was written up in a standard template — hypothesis, setup, procedure, metrics, expected outcomes, falsification conditions, runtime budget. Third, execution by a different agent — Claude Code, running locally on an RTX 5070 Ti — that did not have the conversational context and therefore could not be lulled into agreement with summaries. Fourth, verification: reading the actual result files rather than only the executing agent's report of them. When the executing agent returned a perplexity number of one hundred eighty-three, the verification step caught that it could not be a real result before any further experiments were run on top of it.
+
+Each handoff in this chain has a specific purpose. The chat dialogue catches conceptual errors. The spec separates hypothesis from execution. The fresh-context executor catches summary drift and prompt-engineered consensus. The file-level verification catches both executing-agent errors and conversational-agent overconfidence. Removing any one of these layers degrades the result. Keeping them in place is what made it possible to publish a clean number rather than a cleanly-presented broken number.
+
+This is a way of doing experimental work that depends on having reliable AI agents at multiple stages. It would not have been possible three years ago. It is barely possible now — each phase has its own failure modes that I have hit and learned from. But it is the workflow that produced the table in this article, and I want to be explicit that the table exists because of the workflow, not just because of the underlying idea.
+
+
+Acknowledgments
+
+The original Sidon proposal had its mathematical scaffolding pushed on by Claude during initial drafting, particularly the dimensional accounting for the address subspace and the Sidon-construction existence argument. ChatGPT caught that pure-sum pooling cannot preserve order regardless of embedding geometry, which forced the recognition that V4's positional bias is doing important work and made the original proposal simpler than it would otherwise have been.
+
+The experimental design and result interpretation described here were developed in the same kind of chat dialogue. The catastrophic-overfit diagnostic that resolved the first ambiguous result was a joint catch — the validation perplexity of one hundred eighty-three was flagged as impossible before any follow-up sweep was scheduled, and the subsequent file-level read confirmed the diagnosis quickly. The right-sized model fix was the executing agent's call, executed in a fresh context, and it landed cleanly.
+
+The next paper will report whether the address_dim equals four ablation closed the remaining recovery gap or whether the loss formulation is the deeper constraint. Either way is informative. That is the point of a real experiment.

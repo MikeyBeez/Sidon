@@ -1,0 +1,54 @@
+Appendix 3: Learned ordered recovery
+
+
+The k equals three positional-notation experiment, described in the body, validated that the Sidon channel supports multiset recovery of three tokens from a single pooled embedding using four address dimensions. The ordered-recovery number reported in that experiment was a side effect of the encoding rather than a measured property. The order code was computed deterministically at pool time from the positions and handed to the recovery step as metadata, so ordered recovery was trivially equal to multiset recovery. The question of whether a pooled embedding could carry order in a way recoverable from geometry alone, with no metadata supplied at recovery, was not actually tested.
+
+This appendix documents the follow-up experiment that closed that gap. Ordered recovery is measured here under a strict rule: the recovery procedure receives only the noised pooled vector plus a model-derived lookup table of all sixty-five cubed equals two hundred seventy-four thousand six hundred twenty-five ordered triples. No token identities, no positions, no order code, no function of the known tuple. Whatever geometric structure carries order must be present inside the pooled vector itself.
+
+
+The structural fact
+
+The thing that motivated the mechanism is a simple algebraic observation. A purely additive pool — the sum of token embeddings, possibly with positional encodings added — cannot carry order. Different orderings of the same tokens give the same multiset of token embeddings and the same multiset of positional encodings, and addition is commutative, so the pool is identical. Order survives in such a pool only if the contribution of each position is multiplied into the corresponding token rather than added to it. Multiplicative position modulation — applying a position-specific matrix to each token embedding before pooling — breaks the symmetry between orderings because the same token at a different position contributes a different vector to the sum.
+
+That observation defined a two-rung mechanism ladder. Each rung tested a different architectural choice for where the order information lives in the embedding.
+
+
+Rung one: shared dimensions, no order training
+
+The first rung reused the four Sidon address dimensions for both jobs. No order-specific loss was added to training. At recovery time, a position-specific matrix was applied to those four dimensions, and the recovered ordered triple was the nearest neighbor in the table of all position-modulated triples. The hope was that the Sidon geometry, trained for multiset injectivity, would also support order recovery once the position modulation was applied.
+
+It did not, but the way it failed is the interesting part. Ordered recovery at lambda equals zero point one reached eighty-seven point two percent — better than chance by a wide margin, but well below the ninety-five-percent bar. Modulating the four shared dimensions to expose order also degraded multiset recovery from the same modulated pool to eighty-seven point six percent, down from ninety-nine point nine percent on the unmodulated Sidon channel. Rung one did not nearly pass. It traded multiset accuracy for order accuracy and landed both around eighty-seven percent. A single subspace cannot do both jobs well — the geometry that exposes order interferes with the geometry that distinguishes multisets.
+
+A secondary observation worth recording: even with no order-specific training at all, fixed multiplicative position modulation alone carried ordered recovery to ninety-five point seven percent at lambda equals one point zero, where the Sidon regularizer is at full pressure and the embeddings are most spread out. The structural fact says additive pooling cannot carry order, and that remains true. But once any multiplicative modulation is present in the pool, order rides on the geometry surprisingly well — within four points of the bar — without paying for it directly. The reason rung one still fails the bar at the operating lambda is that the position modulation also damages the very multiset geometry it is trying to read from.
+
+
+Rung two: dedicated order dimensions and an injectivity loss
+
+The second rung gave order its own dimensions. Two additional embedding dimensions, separate from the four Sidon dimensions, were dedicated to order. A new loss term was added to training — call it L underscore order, an injectivity loss — that pushed apart the position-modulated pooled order-vectors of different orderings of the same multiset. The Sidon channel was left untouched, so multiset recovery operated on clean four-dimensional addresses while order recovery operated on a separate two-dimensional channel.
+
+The loss is structurally analogous to the Sidon injectivity loss but applied to a different combinatorial condition. Where the Sidon loss says different multisets should produce different pooled addresses, the order loss says different orderings of the same multiset should produce different points in the order subspace. Both are injectivity losses on encoding maps. Both are enforced by stochastic gradient descent during ordinary language-model pretraining, alongside the cross-entropy term. The total objective is the language-modeling loss plus lambda times the Sidon injectivity loss plus lambda times the order injectivity loss.
+
+At lambda equals zero point one with two dedicated order dimensions, ordered recovery reached ninety-eight point nine percent. The gap to the multiset capability of ninety-nine point eight percent on the clean Sidon channel was zero point nine percentage points — small but nonzero. The validation perplexity ratio was one point zero zero five, well within seed noise of the language-modeling baseline. Order is now genuinely recovered from the geometry of the pooled vector, not from metadata, and at no language-modeling cost.
+
+
+The dimension cost
+
+The dimension-cost curve, swept at lambda equals zero point one, traces what extra dimensions buy. With two order dimensions, ordered recovery is ninety-eight point nine percent. With four, it climbs to ninety-nine point seven. With eight, it reaches one hundred percent within the precision of the run. The marginal value falls off quickly: two to four buys zero point eight percentage points, four to eight buys zero point three. Two dimensions is the right deployable answer at this vocabulary size and noise level. The remaining gap to perfection is below the noise floor of practical use, and doubling the dimension cost for an additional fraction of a percent is not worth it.
+
+The total address structure inside the embedding is now four dimensions for the multiset plus two dimensions for the order, six dimensions in all, out of two hundred fifty-six. The remaining two hundred fifty are free for language modeling, and the perplexity numbers say that is enough.
+
+
+The order-versus-multiset gap, measured honestly
+
+The previous k equals three experiment reported a multiset number and an ordered number side by side as if they measured different things. They did not. The order code was supplied at recovery time, so the ordered number simply inherited the multiset number. The honest scientific content of ordered recovery is the gap between order and multiset when both are recovered from the same pool under the same rules, without metadata.
+
+That gap is measurable in this experiment. At lambda equals zero with no Sidon regularization at all and four order dimensions, the gap between ordered recovery and matched multiset recovery is on the order of ten point six percentage points — order is genuinely harder than multiset when no constraints are in place. At lambda equals zero point one, with the regularizer engaged, the gap closes to zero point three percentage points. At lambda equals one point zero the gap closes further, to essentially zero.
+
+The quantity being measured here is the marginal difficulty of order over multiset under noise, and the rate at which the regularizer closes that difficulty. The gap exists, it is real, and it is small at the operating point that also satisfies the language-modeling constraint. This is what a clean follow-up to a previously sloppy comparison looks like.
+
+
+Implementation note: the position matrices are fixed, not learned
+
+The position modulation matrices used in rung two were not trained. They were generated from a constant seed and held fixed throughout training and evaluation, applied identically to every query and every entry in the lookup table. The learning happened entirely in the embedding values of the two-dimensional order subspace, not in the position transformation. This is worth being explicit about because "position modulation" can suggest learned positional vectors of the standard transformer kind. It is not that. The position transformation is a fixed property of the recovery scheme. The learnable parameters are the embedding values, which SGD adjusts under L underscore order until different orderings land at distinguishable points in the two-dimensional order subspace after the fixed transformation has been applied.
+
+A natural follow-up is whether allowing the position matrices to be learned alongside the embeddings would reduce the dimension cost further or close the lambda equals zero point one gap. That experiment is queued. So is the question of whether an LM-internal pooling operator — one that the model itself already uses, rather than a recovery-time construction — can carry the same structure. The latter is the harder and more interesting version of the same question: not "can a recovery procedure read order out of the geometry," but "does the model's own pooling do that, on its own terms." The current experiment validates the mechanism; the next one would validate the integration.
